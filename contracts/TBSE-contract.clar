@@ -911,3 +911,247 @@
       (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
       (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
     )
+  ;; Check if dispute is open
+    (asserts! (is-eq (get status dispute) DISPUTE-STATUS-OPEN) (err ERR-DISPUTE-ALREADY-RESOLVED))
+    
+    ;; Check if caller is the assigned arbiter or contract owner
+    (asserts! (or (is-eq (some user-id) (get arbiter-id dispute))
+                 (is-eq tx-sender (var-get contract-owner)))
+              (err ERR-NOT-AUTHORIZED))
+    
+    ;; Resolve dispute
+    (map-set disputes
+      { dispute-id: dispute-id }
+      (merge dispute {
+        status: DISPUTE-STATUS-RESOLVED,
+        resolution: (some resolution),
+        time-adjustment: (some time-adjustment),
+        resolved-at: (some block-height)
+      })
+    )
+    
+    ;; Apply time adjustment if needed
+    (when (not (is-eq time-adjustment 0))
+      (if (> time-adjustment 0)
+        ;; Additional time for provider (from receiver)
+        (begin
+          ;; Check if receiver has enough balance
+          (if (>= (get time-balance receiver) (to-uint time-adjustment))
+            (begin
+              ;; Deduct from receiver
+              (map-set users
+                { user-id: receiver-id }
+                (merge receiver {
+                  time-balance: (- (get time-balance receiver) (to-uint time-adjustment))
+                })
+              )
+              ;; Add to provider
+              (map-set users
+                { user-id: provider-id }
+                (merge provider {
+                  time-balance: (+ (get time-balance provider) (to-uint time-adjustment)),
+                  time-contributed: (+ (get time-contributed provider) (to-uint time-adjustment))
+                })
+              )
+            )
+            ;; Insufficient balance, take from community fund
+            (begin
+              (var-set community-fund (- (var-get community-fund) (to-uint time-adjustment)))
+              (map-set users
+                { user-id: provider-id }
+                (merge provider {
+                  time-balance: (+ (get time-balance provider) (to-uint time-adjustment)),
+                  time-contributed: (+ (get time-contributed provider) (to-uint time-adjustment))
+                })
+              )
+            )
+          )
+        )
+        ;; Time refund to receiver (negative adjustment means provider gets less)
+        (begin
+          (let
+            (
+              (abs-adjustment (to-uint (- 0 time-adjustment)))
+            )
+            ;; Check if provider has enough balance
+            (if (>= (get time-balance provider) abs-adjustment)
+              (begin
+                ;; Deduct from provider
+                (map-set users
+                  { user-id: provider-id }
+                  (merge provider {
+                    time-balance: (- (get time-balance provider) abs-adjustment)
+                  })
+                )
+                ;; Add to receiver
+                (map-set users
+                  { user-id: receiver-id }
+                  (merge receiver {
+                    time-balance: (+ (get time-balance receiver) abs-adjustment)
+                  })
+                )
+              )
+              ;; Insufficient balance, take from community fund
+              (begin
+                (var-set community-fund (- (var-get community-fund) abs-adjustment))
+                (map-set users
+                  { user-id: receiver-id }
+                  (merge receiver {
+                    time-balance: (+ (get time-balance receiver) abs-adjustment)
+                  })
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+    
+    ;; Update service status to completed or verified depending on original status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-COMPLETED ;; Reset to completed status after dispute resolution
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Make a user an arbiter
+(define-public (make-arbiter (user-id uint))
+  (let
+    (
+      (user (unwrap! (get-user user-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Only contract owner can make users arbiters
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Update user
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        is-arbiter: true
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Transfer time credits to community fund
+(define-public (donate-to-community (amount uint))
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (user (unwrap! (get-user user-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if user has enough balance
+    (asserts! (>= (get time-balance user) amount) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Deduct from user
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        time-balance: (- (get time-balance user) amount)
+      })
+    )
+    
+    ;; Add to community fund
+    (var-set community-fund (+ (var-get community-fund) amount))
+    
+    (ok true)
+  )
+)
+
+;; Allocate time from community fund to user
+(define-public (allocate-from-community (recipient-id uint) (amount uint) (reason (string-utf8 500)))
+  (let
+    (
+      (recipient (unwrap! (get-user recipient-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Only contract owner can allocate from community fund
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if community fund has enough balance
+    (asserts! (>= (var-get community-fund) amount) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Deduct from community fund
+    (var-set community-fund (- (var-get community-fund) amount))
+    
+    ;; Add to recipient
+    (map-set users
+      { user-id: recipient-id }
+      (merge recipient {
+        time-balance: (+ (get time-balance recipient) amount)
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Update user profile
+(define-public (update-profile (name (string-utf8 100)) (bio (string-utf8 500)))
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (user (unwrap! (get-user user-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Update user profile
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        name: name,
+        bio: bio,
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Update skill provider details
+(define-public (update-provider-details 
+  (skill-id uint) 
+  (hourly-rate uint) 
+  (experience-level (string-utf8 50))
+  (availability (string-utf8 500))
+)
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-skill (unwrap! (get-skill-provider skill-id user-id) (err ERR-NOT-SERVICE-PROVIDER)))
+    )
+    
+    ;; Update provider details
+    (map-set skill-providers
+      { skill-id: skill-id, user-id: user-id }
+      (merge provider-skill {
+        hourly-rate: hourly-rate,
+        experience-level: experience-level,
+        availability: availability
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Transfer contract ownership
+(define-public (transfer-ownership (new-owner principal))
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    (var-set contract-owner new-owner)
+    (ok true)
+  )
+)
