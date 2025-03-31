@@ -662,3 +662,252 @@
     )
   )
 )
+;; Leave feedback for a service
+(define-public (leave-feedback (service-id uint) (rating uint) (comment (string-utf8 500)))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (is-provider (is-eq user-id provider-id))
+      (is-receiver (is-eq user-id receiver-id))
+      (feedback-target-id (if is-provider receiver-id provider-id))
+      (feedback-target (unwrap! (get-user feedback-target-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is either provider or receiver
+    (asserts! (or is-provider is-receiver) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if service is verified
+    (asserts! (is-eq (get status service) SERVICE-STATUS-VERIFIED) (err ERR-SERVICE-NOT-COMPLETED))
+    
+    ;; Check if feedback already given
+    (asserts! (is-none (map-get? service-feedback { service-id: service-id, feedback-by: user-id }))
+              (err ERR-FEEDBACK-ALREADY-GIVEN))
+    
+    ;; Check rating range (0-100)
+    (asserts! (<= rating u100) (err ERR-INVALID-PARAMETERS))
+    
+    ;; Record feedback
+    (map-set service-feedback
+      { service-id: service-id, feedback-by: user-id }
+      {
+        rating: rating,
+        comment: comment,
+        created-at: block-height
+      }
+    )
+    
+    ;; Update target's reputation and feedback stats
+    (let
+      (
+        (current-count (get feedback-count feedback-target))
+        (current-rating (get avg-rating feedback-target))
+        (new-count (+ current-count u1))
+        (new-rating (if (> current-count u0)
+                       (/ (+ (* current-rating current-count) rating) new-count)
+                       rating))
+      )
+      
+      (map-set users
+        { user-id: feedback-target-id }
+        (merge feedback-target {
+          feedback-count: new-count,
+          avg-rating: new-rating,
+          reputation-score: (/ (+ (get reputation-score feedback-target) new-rating) u2) ;; Blend of old reputation and new rating
+        })
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+;; Endorse a user for a skill
+(define-public (endorse-skill (skill-id uint) (endorsed-user-id uint) (comment (string-utf8 200)))
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (endorser-id (get user-id user-mapping))
+      (skill (unwrap! (get-skill skill-id) (err ERR-SKILL-NOT-FOUND)))
+      (endorsed-user (unwrap! (get-user endorsed-user-id) (err ERR-USER-NOT-FOUND)))
+      (provider-skill (unwrap! (get-skill-provider skill-id endorsed-user-id) (err ERR-NOT-SERVICE-PROVIDER)))
+    )
+    
+    ;; Cannot endorse yourself
+    (asserts! (not (is-eq endorser-id endorsed-user-id)) (err ERR-SELF-ACTION-NOT-ALLOWED))
+    
+    ;; Check if already endorsed
+    (asserts! (not (has-endorsed? skill-id endorsed-user-id endorser-id)) (err ERR-ENDORSEMENT-ALREADY-EXISTS))
+    
+    ;; Record endorsement
+    (map-set skill-endorsements
+      { skill-id: skill-id, endorsed-user-id: endorsed-user-id, endorser-user-id: endorser-id }
+      {
+        comment: comment,
+        created-at: block-height
+      }
+    )
+    
+    ;; Update endorsement count
+    (map-set skill-providers
+      { skill-id: skill-id, user-id: endorsed-user-id }
+      (merge provider-skill {
+        endorsement-count: (+ (get endorsement-count provider-skill) u1)
+      })
+    )
+    
+    ;; Update endorsed user's reputation
+    (map-set users
+      { user-id: endorsed-user-id }
+      (merge endorsed-user {
+        reputation-score: (min (+ (get reputation-score endorsed-user) u2) u100) ;; Small boost to reputation
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Cancel a service
+(define-public (cancel-service (service-id uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is either provider or receiver
+    (asserts! (or (is-eq user-id provider-id) (is-eq user-id receiver-id)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if service is in pending or started status
+    (asserts! (or (is-eq (get status service) SERVICE-STATUS-PENDING)
+                 (is-eq (get status service) SERVICE-STATUS-STARTED))
+              (err ERR-SERVICE-ALREADY-CANCELED))
+    
+    ;; If service was started, refund time to receiver
+    (when (is-eq (get status service) SERVICE-STATUS-STARTED)
+      (map-set users
+        { user-id: receiver-id }
+        (merge receiver {
+          time-balance: (+ (get time-balance receiver) (get estimated-minutes service))
+        })
+      )
+    )
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-CANCELED
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Raise a dispute
+(define-public (raise-dispute (service-id uint) (description (string-utf8 500)))
+  (let
+    (
+      (dispute-id (var-get next-dispute-id))
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+    )
+    
+    ;; Check if caller is either provider or receiver
+    (asserts! (or (is-eq user-id provider-id) (is-eq user-id receiver-id)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if service is not already in disputed status
+    (asserts! (not (is-eq (get status service) SERVICE-STATUS-DISPUTED)) (err ERR-DISPUTE-ALREADY-EXISTS))
+    
+    ;; Check if service was started
+    (asserts! (or (is-eq (get status service) SERVICE-STATUS-STARTED)
+                 (is-eq (get status service) SERVICE-STATUS-COMPLETED))
+              (err ERR-INVALID-PARAMETERS))
+    
+    ;; Create dispute
+    (map-set disputes
+      { dispute-id: dispute-id }
+      {
+        service-id: service-id,
+        raised-by-id: user-id,
+        raised-against-id: (if (is-eq user-id provider-id) receiver-id provider-id),
+        description: description,
+        status: DISPUTE-STATUS-OPEN,
+        arbiter-id: none,
+        resolution: none,
+        time-adjustment: none,
+        created-at: block-height,
+        resolved-at: none
+      }
+    )
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-DISPUTED
+      })
+    )
+    
+    ;; Increment dispute ID
+    (var-set next-dispute-id (+ dispute-id u1))
+    
+    (ok dispute-id)
+  )
+)
+
+;; Assign arbiter to dispute
+(define-public (assign-arbiter (dispute-id uint) (arbiter-id uint))
+  (let
+    (
+      (dispute (unwrap! (get-dispute dispute-id) (err ERR-DISPUTE-NOT-FOUND)))
+      (arbiter (unwrap! (get-user arbiter-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Only contract owner can assign arbiters
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if dispute is open
+    (asserts! (is-eq (get status dispute) DISPUTE-STATUS-OPEN) (err ERR-DISPUTE-ALREADY-RESOLVED))
+    
+    ;; Check if user is an arbiter
+    (asserts! (get is-arbiter arbiter) (err ERR-NOT-ARBITER))
+    
+    ;; Assign arbiter
+    (map-set disputes
+      { dispute-id: dispute-id }
+      (merge dispute {
+        arbiter-id: (some arbiter-id)
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Resolve a dispute
+(define-public (resolve-dispute (dispute-id uint) (resolution (string-utf8 500)) (time-adjustment int))
+  (let
+    (
+      (dispute (unwrap! (get-dispute dispute-id) (err ERR-DISPUTE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (service-id (get service-id dispute))
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
