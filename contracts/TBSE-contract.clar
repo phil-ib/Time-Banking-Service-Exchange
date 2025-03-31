@@ -390,3 +390,768 @@
         { count: (+ current-count u1) }
       )
     )
+ ;; Update user's last active block
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Request a service
+(define-public (request-service
+  (provider-id uint)
+  (skill-id uint)
+  (description (string-utf8 500))
+  (estimated-minutes uint)
+  (notes (string-utf8 500))
+)
+  (let
+    (
+      (service-id (var-get next-service-id))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (receiver-id (get user-id user-mapping))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (provider-skill (unwrap! (get-skill-provider skill-id provider-id) (err ERR-NOT-SERVICE-PROVIDER)))
+    )
+    
+    ;; Cannot request service from yourself
+    (asserts! (not (is-eq provider-id receiver-id)) (err ERR-SELF-ACTION-NOT-ALLOWED))
+    
+    ;; Check if provider is active
+    (asserts! (get is-active provider) (err ERR-USER-NOT-FOUND))
+    
+    ;; Check if receiver has enough time balance
+    (asserts! (>= (get time-balance receiver) estimated-minutes) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Create service request
+    (map-set services
+      { service-id: service-id }
+      {
+        provider-id: provider-id,
+        receiver-id: receiver-id,
+        skill-id: skill-id,
+        description: description,
+        estimated-minutes: estimated-minutes,
+        actual-minutes: none,
+        status: SERVICE-STATUS-PENDING,
+        created-at: block-height,
+        started-at: none,
+        completed-at: none,
+        verified-at: none,
+        notes: notes
+      }
+    )
+    
+    ;; Update provider's service list
+    (let
+      (
+        (provider-count (get count (default-to { count: u0 } 
+                                          (map-get? provider-service-count { user-id: provider-id }))))
+      )
+      (map-set provider-services
+        { user-id: provider-id, index: provider-count }
+        { service-id: service-id }
+      )
+      
+      (map-set provider-service-count
+        { user-id: provider-id }
+        { count: (+ provider-count u1) }
+      )
+    )
+    
+    ;; Update receiver's service list
+    (let
+      (
+        (receiver-count (get count (default-to { count: u0 } 
+                                          (map-get? receiver-service-count { user-id: receiver-id }))))
+      )
+      (map-set receiver-services
+        { user-id: receiver-id, index: receiver-count }
+        { service-id: service-id }
+      )
+      
+      (map-set receiver-service-count
+        { user-id: receiver-id }
+        { count: (+ receiver-count u1) }
+      )
+    )
+    
+    ;; Update user's last active block
+    (map-set users
+      { user-id: receiver-id }
+      (merge receiver {
+        last-active-block: block-height
+      })
+    )
+    
+    ;; Increment service ID
+    (var-set next-service-id (+ service-id u1))
+    
+    (ok service-id)
+  )
+)
+
+;; Start a service
+(define-public (start-service (service-id uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is the provider
+    (asserts! (is-eq user-id provider-id) (err ERR-NOT-SERVICE-PROVIDER))
+    
+    ;; Check if service is in pending status
+    (asserts! (is-eq (get status service) SERVICE-STATUS-PENDING) (err ERR-SERVICE-ALREADY-STARTED))
+    
+    ;; Check if receiver has enough time balance
+    (asserts! (>= (get time-balance receiver) (get estimated-minutes service)) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Reserve the time from receiver's balance
+    (map-set users
+      { user-id: receiver-id }
+      (merge receiver {
+        time-balance: (- (get time-balance receiver) (get estimated-minutes service)),
+        last-active-block: block-height
+      })
+    )
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-STARTED,
+        started-at: (some block-height)
+      })
+    )
+    
+    ;; Update provider's last active block
+    (map-set users
+      { user-id: provider-id }
+      (merge provider {
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Complete a service
+(define-public (complete-service (service-id uint) (actual-minutes uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is the provider
+    (asserts! (is-eq user-id provider-id) (err ERR-NOT-SERVICE-PROVIDER))
+    
+    ;; Check if service is in started status
+    (asserts! (is-eq (get status service) SERVICE-STATUS-STARTED) (err ERR-SERVICE-NOT-STARTED))
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-COMPLETED,
+        completed-at: (some block-height),
+        actual-minutes: (some actual-minutes)
+      })
+    )
+    
+    ;; Update provider's last active block
+    (map-set users
+      { user-id: provider-id }
+      (merge provider {
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Verify a completed service
+(define-public (verify-service (service-id uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is the receiver
+    (asserts! (is-eq user-id receiver-id) (err ERR-NOT-SERVICE-RECEIVER))
+    
+    ;; Check if service is in completed status
+    (asserts! (is-eq (get status service) SERVICE-STATUS-COMPLETED) (err ERR-SERVICE-NOT-COMPLETED))
+    
+    ;; Get the actual minutes spent
+    (let
+      (
+        (actual-mins (unwrap! (get actual-minutes service) (err ERR-INVALID-PARAMETERS)))
+        (estimated-mins (get estimated-minutes service))
+        (time-difference (- actual-mins estimated-mins))
+        (refund-amount (if (< actual-mins estimated-mins) (- estimated-mins actual-mins) u0))
+      )
+      
+      ;; Credit provider's time balance
+      (map-set users
+        { user-id: provider-id }
+        (merge provider {
+          time-balance: (+ (get time-balance provider) actual-mins),
+          time-contributed: (+ (get time-contributed provider) actual-mins),
+          last-active-block: block-height
+        })
+      )
+      
+      ;; Refund receiver if service took less time than estimated
+      (when (> refund-amount u0)
+        (map-set users
+          { user-id: receiver-id }
+          (merge receiver {
+            time-balance: (+ (get time-balance receiver) refund-amount)
+          })
+        )
+      )
+      
+      ;; Update receiver's time received
+      (map-set users
+        { user-id: receiver-id }
+        (merge receiver {
+          time-received: (+ (get time-received receiver) actual-mins),
+          last-active-block: block-height
+        })
+      )
+      
+      ;; Update service status
+      (map-set services
+        { service-id: service-id }
+        (merge service {
+          status: SERVICE-STATUS-VERIFIED,
+          verified-at: (some block-height)
+        })
+      )
+      
+      ;; Add small donation to community fund (1% of time)
+      (var-set community-fund (+ (var-get community-fund) (/ actual-mins u100)))
+      
+      (ok true)
+    )
+  )
+)
+;; Leave feedback for a service
+(define-public (leave-feedback (service-id uint) (rating uint) (comment (string-utf8 500)))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (is-provider (is-eq user-id provider-id))
+      (is-receiver (is-eq user-id receiver-id))
+      (feedback-target-id (if is-provider receiver-id provider-id))
+      (feedback-target (unwrap! (get-user feedback-target-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is either provider or receiver
+    (asserts! (or is-provider is-receiver) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if service is verified
+    (asserts! (is-eq (get status service) SERVICE-STATUS-VERIFIED) (err ERR-SERVICE-NOT-COMPLETED))
+    
+    ;; Check if feedback already given
+    (asserts! (is-none (map-get? service-feedback { service-id: service-id, feedback-by: user-id }))
+              (err ERR-FEEDBACK-ALREADY-GIVEN))
+    
+    ;; Check rating range (0-100)
+    (asserts! (<= rating u100) (err ERR-INVALID-PARAMETERS))
+    
+    ;; Record feedback
+    (map-set service-feedback
+      { service-id: service-id, feedback-by: user-id }
+      {
+        rating: rating,
+        comment: comment,
+        created-at: block-height
+      }
+    )
+    
+    ;; Update target's reputation and feedback stats
+    (let
+      (
+        (current-count (get feedback-count feedback-target))
+        (current-rating (get avg-rating feedback-target))
+        (new-count (+ current-count u1))
+        (new-rating (if (> current-count u0)
+                       (/ (+ (* current-rating current-count) rating) new-count)
+                       rating))
+      )
+      
+      (map-set users
+        { user-id: feedback-target-id }
+        (merge feedback-target {
+          feedback-count: new-count,
+          avg-rating: new-rating,
+          reputation-score: (/ (+ (get reputation-score feedback-target) new-rating) u2) ;; Blend of old reputation and new rating
+        })
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+;; Endorse a user for a skill
+(define-public (endorse-skill (skill-id uint) (endorsed-user-id uint) (comment (string-utf8 200)))
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (endorser-id (get user-id user-mapping))
+      (skill (unwrap! (get-skill skill-id) (err ERR-SKILL-NOT-FOUND)))
+      (endorsed-user (unwrap! (get-user endorsed-user-id) (err ERR-USER-NOT-FOUND)))
+      (provider-skill (unwrap! (get-skill-provider skill-id endorsed-user-id) (err ERR-NOT-SERVICE-PROVIDER)))
+    )
+    
+    ;; Cannot endorse yourself
+    (asserts! (not (is-eq endorser-id endorsed-user-id)) (err ERR-SELF-ACTION-NOT-ALLOWED))
+    
+    ;; Check if already endorsed
+    (asserts! (not (has-endorsed? skill-id endorsed-user-id endorser-id)) (err ERR-ENDORSEMENT-ALREADY-EXISTS))
+    
+    ;; Record endorsement
+    (map-set skill-endorsements
+      { skill-id: skill-id, endorsed-user-id: endorsed-user-id, endorser-user-id: endorser-id }
+      {
+        comment: comment,
+        created-at: block-height
+      }
+    )
+    
+    ;; Update endorsement count
+    (map-set skill-providers
+      { skill-id: skill-id, user-id: endorsed-user-id }
+      (merge provider-skill {
+        endorsement-count: (+ (get endorsement-count provider-skill) u1)
+      })
+    )
+    
+    ;; Update endorsed user's reputation
+    (map-set users
+      { user-id: endorsed-user-id }
+      (merge endorsed-user {
+        reputation-score: (min (+ (get reputation-score endorsed-user) u2) u100) ;; Small boost to reputation
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Cancel a service
+(define-public (cancel-service (service-id uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is either provider or receiver
+    (asserts! (or (is-eq user-id provider-id) (is-eq user-id receiver-id)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if service is in pending or started status
+    (asserts! (or (is-eq (get status service) SERVICE-STATUS-PENDING)
+                 (is-eq (get status service) SERVICE-STATUS-STARTED))
+              (err ERR-SERVICE-ALREADY-CANCELED))
+    
+    ;; If service was started, refund time to receiver
+    (when (is-eq (get status service) SERVICE-STATUS-STARTED)
+      (map-set users
+        { user-id: receiver-id }
+        (merge receiver {
+          time-balance: (+ (get time-balance receiver) (get estimated-minutes service))
+        })
+      )
+    )
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-CANCELED
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Raise a dispute
+(define-public (raise-dispute (service-id uint) (description (string-utf8 500)))
+  (let
+    (
+      (dispute-id (var-get next-dispute-id))
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+    )
+    
+    ;; Check if caller is either provider or receiver
+    (asserts! (or (is-eq user-id provider-id) (is-eq user-id receiver-id)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if service is not already in disputed status
+    (asserts! (not (is-eq (get status service) SERVICE-STATUS-DISPUTED)) (err ERR-DISPUTE-ALREADY-EXISTS))
+    
+    ;; Check if service was started
+    (asserts! (or (is-eq (get status service) SERVICE-STATUS-STARTED)
+                 (is-eq (get status service) SERVICE-STATUS-COMPLETED))
+              (err ERR-INVALID-PARAMETERS))
+    
+    ;; Create dispute
+    (map-set disputes
+      { dispute-id: dispute-id }
+      {
+        service-id: service-id,
+        raised-by-id: user-id,
+        raised-against-id: (if (is-eq user-id provider-id) receiver-id provider-id),
+        description: description,
+        status: DISPUTE-STATUS-OPEN,
+        arbiter-id: none,
+        resolution: none,
+        time-adjustment: none,
+        created-at: block-height,
+        resolved-at: none
+      }
+    )
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-DISPUTED
+      })
+    )
+    
+    ;; Increment dispute ID
+    (var-set next-dispute-id (+ dispute-id u1))
+    
+    (ok dispute-id)
+  )
+)
+
+;; Assign arbiter to dispute
+(define-public (assign-arbiter (dispute-id uint) (arbiter-id uint))
+  (let
+    (
+      (dispute (unwrap! (get-dispute dispute-id) (err ERR-DISPUTE-NOT-FOUND)))
+      (arbiter (unwrap! (get-user arbiter-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Only contract owner can assign arbiters
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if dispute is open
+    (asserts! (is-eq (get status dispute) DISPUTE-STATUS-OPEN) (err ERR-DISPUTE-ALREADY-RESOLVED))
+    
+    ;; Check if user is an arbiter
+    (asserts! (get is-arbiter arbiter) (err ERR-NOT-ARBITER))
+    
+    ;; Assign arbiter
+    (map-set disputes
+      { dispute-id: dispute-id }
+      (merge dispute {
+        arbiter-id: (some arbiter-id)
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Resolve a dispute
+(define-public (resolve-dispute (dispute-id uint) (resolution (string-utf8 500)) (time-adjustment int))
+  (let
+    (
+      (dispute (unwrap! (get-dispute dispute-id) (err ERR-DISPUTE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (service-id (get service-id dispute))
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
+  ;; Check if dispute is open
+    (asserts! (is-eq (get status dispute) DISPUTE-STATUS-OPEN) (err ERR-DISPUTE-ALREADY-RESOLVED))
+    
+    ;; Check if caller is the assigned arbiter or contract owner
+    (asserts! (or (is-eq (some user-id) (get arbiter-id dispute))
+                 (is-eq tx-sender (var-get contract-owner)))
+              (err ERR-NOT-AUTHORIZED))
+    
+    ;; Resolve dispute
+    (map-set disputes
+      { dispute-id: dispute-id }
+      (merge dispute {
+        status: DISPUTE-STATUS-RESOLVED,
+        resolution: (some resolution),
+        time-adjustment: (some time-adjustment),
+        resolved-at: (some block-height)
+      })
+    )
+    
+    ;; Apply time adjustment if needed
+    (when (not (is-eq time-adjustment 0))
+      (if (> time-adjustment 0)
+        ;; Additional time for provider (from receiver)
+        (begin
+          ;; Check if receiver has enough balance
+          (if (>= (get time-balance receiver) (to-uint time-adjustment))
+            (begin
+              ;; Deduct from receiver
+              (map-set users
+                { user-id: receiver-id }
+                (merge receiver {
+                  time-balance: (- (get time-balance receiver) (to-uint time-adjustment))
+                })
+              )
+              ;; Add to provider
+              (map-set users
+                { user-id: provider-id }
+                (merge provider {
+                  time-balance: (+ (get time-balance provider) (to-uint time-adjustment)),
+                  time-contributed: (+ (get time-contributed provider) (to-uint time-adjustment))
+                })
+              )
+            )
+            ;; Insufficient balance, take from community fund
+            (begin
+              (var-set community-fund (- (var-get community-fund) (to-uint time-adjustment)))
+              (map-set users
+                { user-id: provider-id }
+                (merge provider {
+                  time-balance: (+ (get time-balance provider) (to-uint time-adjustment)),
+                  time-contributed: (+ (get time-contributed provider) (to-uint time-adjustment))
+                })
+              )
+            )
+          )
+        )
+        ;; Time refund to receiver (negative adjustment means provider gets less)
+        (begin
+          (let
+            (
+              (abs-adjustment (to-uint (- 0 time-adjustment)))
+            )
+            ;; Check if provider has enough balance
+            (if (>= (get time-balance provider) abs-adjustment)
+              (begin
+                ;; Deduct from provider
+                (map-set users
+                  { user-id: provider-id }
+                  (merge provider {
+                    time-balance: (- (get time-balance provider) abs-adjustment)
+                  })
+                )
+                ;; Add to receiver
+                (map-set users
+                  { user-id: receiver-id }
+                  (merge receiver {
+                    time-balance: (+ (get time-balance receiver) abs-adjustment)
+                  })
+                )
+              )
+              ;; Insufficient balance, take from community fund
+              (begin
+                (var-set community-fund (- (var-get community-fund) abs-adjustment))
+                (map-set users
+                  { user-id: receiver-id }
+                  (merge receiver {
+                    time-balance: (+ (get time-balance receiver) abs-adjustment)
+                  })
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+    
+    ;; Update service status to completed or verified depending on original status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-COMPLETED ;; Reset to completed status after dispute resolution
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Make a user an arbiter
+(define-public (make-arbiter (user-id uint))
+  (let
+    (
+      (user (unwrap! (get-user user-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Only contract owner can make users arbiters
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Update user
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        is-arbiter: true
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Transfer time credits to community fund
+(define-public (donate-to-community (amount uint))
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (user (unwrap! (get-user user-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if user has enough balance
+    (asserts! (>= (get time-balance user) amount) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Deduct from user
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        time-balance: (- (get time-balance user) amount)
+      })
+    )
+    
+    ;; Add to community fund
+    (var-set community-fund (+ (var-get community-fund) amount))
+    
+    (ok true)
+  )
+)
+
+;; Allocate time from community fund to user
+(define-public (allocate-from-community (recipient-id uint) (amount uint) (reason (string-utf8 500)))
+  (let
+    (
+      (recipient (unwrap! (get-user recipient-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Only contract owner can allocate from community fund
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if community fund has enough balance
+    (asserts! (>= (var-get community-fund) amount) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Deduct from community fund
+    (var-set community-fund (- (var-get community-fund) amount))
+    
+    ;; Add to recipient
+    (map-set users
+      { user-id: recipient-id }
+      (merge recipient {
+        time-balance: (+ (get time-balance recipient) amount)
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Update user profile
+(define-public (update-profile (name (string-utf8 100)) (bio (string-utf8 500)))
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (user (unwrap! (get-user user-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Update user profile
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        name: name,
+        bio: bio,
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Update skill provider details
+(define-public (update-provider-details 
+  (skill-id uint) 
+  (hourly-rate uint) 
+  (experience-level (string-utf8 50))
+  (availability (string-utf8 500))
+)
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-skill (unwrap! (get-skill-provider skill-id user-id) (err ERR-NOT-SERVICE-PROVIDER)))
+    )
+    
+    ;; Update provider details
+    (map-set skill-providers
+      { skill-id: skill-id, user-id: user-id }
+      (merge provider-skill {
+        hourly-rate: hourly-rate,
+        experience-level: experience-level,
+        availability: availability
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Transfer contract ownership
+(define-public (transfer-ownership (new-owner principal))
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    (var-set contract-owner new-owner)
+    (ok true)
+  )
+)
