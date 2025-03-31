@@ -138,3 +138,117 @@
   { user-id: uint }
   { count: uint }
 )
+;; Map to track receiver's services
+(define-map receiver-services
+  { user-id: uint, index: uint }
+  { service-id: uint }
+)
+
+;; Map to count services received by user
+(define-map receiver-service-count
+  { user-id: uint }
+  { count: uint }
+)
+
+;; Feedback for completed services
+(define-map service-feedback
+  { service-id: uint, feedback-by: uint }
+  {
+    rating: uint,                  ;; 0-100 rating
+    comment: (string-utf8 500),
+    created-at: uint
+  }
+)
+
+;; Skill endorsements between users
+(define-map skill-endorsements
+  { skill-id: uint, endorsed-user-id: uint, endorser-user-id: uint }
+  {
+    comment: (string-utf8 200),
+    created-at: uint
+  }
+)
+
+;; Dispute records
+(define-map disputes
+  { dispute-id: uint }
+  {
+    service-id: uint,
+    raised-by-id: uint,
+    raised-against-id: uint,
+    description: (string-utf8 500),
+    status: uint,
+    arbiter-id: (optional uint),
+    resolution: (optional (string-utf8 500)),
+    time-adjustment: (optional int),
+    created-at: uint,
+    resolved-at: (optional uint)
+  }
+)
+
+;; Read-only functions
+
+;; Get user details
+(define-read-only (get-user (user-id uint))
+  (map-get? users { user-id: user-id })
+)
+
+;; Get user ID from principal
+(define-read-only (get-user-id-by-principal (user-principal principal))
+  (map-get? principal-to-user-id { principal: user-principal })
+)
+
+;; Get skill details
+(define-read-only (get-skill (skill-id uint))
+  (map-get? skills { skill-id: skill-id })
+)
+
+;; Get service details
+(define-read-only (get-service (service-id uint))
+  (map-get? services { service-id: service-id })
+)
+
+;; Get skill provider details
+(define-read-only (get-skill-provider (skill-id uint) (user-id uint))
+  (map-get? skill-providers { skill-id: skill-id, user-id: user-id })
+)
+
+;; Check if a user offers a particular skill
+(define-read-only (offers-skill? (user-id uint) (skill-id uint))
+  (is-some (get-skill-provider skill-id user-id))
+)
+
+;; Get feedback for a service
+(define-read-only (get-service-feedback (service-id uint) (feedback-by uint))
+  (map-get? service-feedback { service-id: service-id, feedback-by: feedback-by })
+)
+
+;; Check if a user has endorsed another user for a skill
+(define-read-only (has-endorsed? (skill-id uint) (endorsed-user-id uint) (endorser-user-id uint))
+  (is-some (map-get? skill-endorsements 
+    { skill-id: skill-id, endorsed-user-id: endorsed-user-id, endorser-user-id: endorser-user-id }))
+)
+
+;; Get dispute details
+(define-read-only (get-dispute (dispute-id uint))
+  (map-get? disputes { dispute-id: dispute-id })
+)
+
+;; Check if a dispute exists for a service
+(define-read-only (service-has-dispute? (service-id uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) false))
+    )
+    (is-eq (get status service) SERVICE-STATUS-DISPUTED)
+  )
+)
+
+;; Public functions
+
+;; Register a new user
+(define-public (register-user (name (string-utf8 100)) (bio (string-utf8 500)))
+  (let
+    (
+      (user-id (var-get next-user-id))
+    )
