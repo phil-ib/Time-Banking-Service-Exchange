@@ -252,3 +252,141 @@
     (
       (user-id (var-get next-user-id))
     )
+  ;; Check if principal is already registered
+    (asserts! (is-none (get-user-id-by-principal tx-sender)) (err ERR-ALREADY-EXISTS))
+    
+    ;; Create user profile
+    (map-set users
+      { user-id: user-id }
+      {
+        principal: tx-sender,
+        name: name,
+        bio: bio,
+        time-balance: u60, ;; Start with 1 hour credit
+        time-contributed: u0,
+        time-received: u0,
+        reputation-score: u50, ;; Default starting reputation
+        feedback-count: u0,
+        avg-rating: u0,
+        join-block: block-height,
+        last-active-block: block-height,
+        is-active: true,
+        is-arbiter: false
+      }
+    )
+    
+    ;; Map principal to user ID
+    (map-set principal-to-user-id
+      { principal: tx-sender }
+      { user-id: user-id }
+    )
+    
+    ;; Initialize skill count
+    (map-set user-skill-count
+      { user-id: user-id }
+      { count: u0 }
+    )
+    
+    ;; Initialize service counts
+    (map-set provider-service-count
+      { user-id: user-id }
+      { count: u0 }
+    )
+    
+    (map-set receiver-service-count
+      { user-id: user-id }
+      { count: u0 }
+    )
+    
+    ;; Increment user ID
+    (var-set next-user-id (+ user-id u1))
+    
+    (ok user-id)
+  )
+)
+
+;; Add a new skill category
+(define-public (add-skill-category (name (string-utf8 100)) (description (string-utf8 500)) (category (string-utf8 100)))
+  (let
+    (
+      (skill-id (var-get next-skill-id))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+    )
+    
+    ;; Only contract owner can add skill categories
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Create skill
+    (map-set skills
+      { skill-id: skill-id }
+      {
+        name: name,
+        description: description,
+        category: category,
+        created-at: block-height,
+        provider-count: u0
+      }
+    )
+    
+    ;; Increment skill ID
+    (var-set next-skill-id (+ skill-id u1))
+    
+    (ok skill-id)
+  )
+)
+
+;; Register as a provider for a skill
+(define-public (register-as-provider 
+  (skill-id uint) 
+  (hourly-rate uint) 
+  (experience-level (string-utf8 50))
+  (availability (string-utf8 500))
+)
+  (let
+    (
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (skill (unwrap! (get-skill skill-id) (err ERR-SKILL-NOT-FOUND)))
+      (user (unwrap! (get-user user-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if already registered for this skill
+    (asserts! (is-none (get-skill-provider skill-id user-id)) (err ERR-ALREADY-EXISTS))
+    
+    ;; Register as provider
+    (map-set skill-providers
+      { skill-id: skill-id, user-id: user-id }
+      {
+        hourly-rate: hourly-rate,
+        experience-level: experience-level,
+        availability: availability,
+        endorsement-count: u0,
+        created-at: block-height
+      }
+    )
+    
+    ;; Update skill provider count
+    (map-set skills
+      { skill-id: skill-id }
+      (merge skill {
+        provider-count: (+ (get provider-count skill) u1)
+      })
+    )
+    
+    ;; Add to user's skills
+    (let
+      (
+        (current-count (get count (default-to { count: u0 } 
+                                          (map-get? user-skill-count { user-id: user-id }))))
+      )
+      (map-set user-skills
+        { user-id: user-id, index: current-count }
+        { skill-id: skill-id }
+      )
+      
+      (map-set user-skill-count
+        { user-id: user-id }
+        { count: (+ current-count u1) }
+      )
+    )
