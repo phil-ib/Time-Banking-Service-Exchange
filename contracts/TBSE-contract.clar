@@ -390,3 +390,275 @@
         { count: (+ current-count u1) }
       )
     )
+ ;; Update user's last active block
+    (map-set users
+      { user-id: user-id }
+      (merge user {
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Request a service
+(define-public (request-service
+  (provider-id uint)
+  (skill-id uint)
+  (description (string-utf8 500))
+  (estimated-minutes uint)
+  (notes (string-utf8 500))
+)
+  (let
+    (
+      (service-id (var-get next-service-id))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (receiver-id (get user-id user-mapping))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (provider-skill (unwrap! (get-skill-provider skill-id provider-id) (err ERR-NOT-SERVICE-PROVIDER)))
+    )
+    
+    ;; Cannot request service from yourself
+    (asserts! (not (is-eq provider-id receiver-id)) (err ERR-SELF-ACTION-NOT-ALLOWED))
+    
+    ;; Check if provider is active
+    (asserts! (get is-active provider) (err ERR-USER-NOT-FOUND))
+    
+    ;; Check if receiver has enough time balance
+    (asserts! (>= (get time-balance receiver) estimated-minutes) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Create service request
+    (map-set services
+      { service-id: service-id }
+      {
+        provider-id: provider-id,
+        receiver-id: receiver-id,
+        skill-id: skill-id,
+        description: description,
+        estimated-minutes: estimated-minutes,
+        actual-minutes: none,
+        status: SERVICE-STATUS-PENDING,
+        created-at: block-height,
+        started-at: none,
+        completed-at: none,
+        verified-at: none,
+        notes: notes
+      }
+    )
+    
+    ;; Update provider's service list
+    (let
+      (
+        (provider-count (get count (default-to { count: u0 } 
+                                          (map-get? provider-service-count { user-id: provider-id }))))
+      )
+      (map-set provider-services
+        { user-id: provider-id, index: provider-count }
+        { service-id: service-id }
+      )
+      
+      (map-set provider-service-count
+        { user-id: provider-id }
+        { count: (+ provider-count u1) }
+      )
+    )
+    
+    ;; Update receiver's service list
+    (let
+      (
+        (receiver-count (get count (default-to { count: u0 } 
+                                          (map-get? receiver-service-count { user-id: receiver-id }))))
+      )
+      (map-set receiver-services
+        { user-id: receiver-id, index: receiver-count }
+        { service-id: service-id }
+      )
+      
+      (map-set receiver-service-count
+        { user-id: receiver-id }
+        { count: (+ receiver-count u1) }
+      )
+    )
+    
+    ;; Update user's last active block
+    (map-set users
+      { user-id: receiver-id }
+      (merge receiver {
+        last-active-block: block-height
+      })
+    )
+    
+    ;; Increment service ID
+    (var-set next-service-id (+ service-id u1))
+    
+    (ok service-id)
+  )
+)
+
+;; Start a service
+(define-public (start-service (service-id uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is the provider
+    (asserts! (is-eq user-id provider-id) (err ERR-NOT-SERVICE-PROVIDER))
+    
+    ;; Check if service is in pending status
+    (asserts! (is-eq (get status service) SERVICE-STATUS-PENDING) (err ERR-SERVICE-ALREADY-STARTED))
+    
+    ;; Check if receiver has enough time balance
+    (asserts! (>= (get time-balance receiver) (get estimated-minutes service)) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Reserve the time from receiver's balance
+    (map-set users
+      { user-id: receiver-id }
+      (merge receiver {
+        time-balance: (- (get time-balance receiver) (get estimated-minutes service)),
+        last-active-block: block-height
+      })
+    )
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-STARTED,
+        started-at: (some block-height)
+      })
+    )
+    
+    ;; Update provider's last active block
+    (map-set users
+      { user-id: provider-id }
+      (merge provider {
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Complete a service
+(define-public (complete-service (service-id uint) (actual-minutes uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is the provider
+    (asserts! (is-eq user-id provider-id) (err ERR-NOT-SERVICE-PROVIDER))
+    
+    ;; Check if service is in started status
+    (asserts! (is-eq (get status service) SERVICE-STATUS-STARTED) (err ERR-SERVICE-NOT-STARTED))
+    
+    ;; Update service status
+    (map-set services
+      { service-id: service-id }
+      (merge service {
+        status: SERVICE-STATUS-COMPLETED,
+        completed-at: (some block-height),
+        actual-minutes: (some actual-minutes)
+      })
+    )
+    
+    ;; Update provider's last active block
+    (map-set users
+      { user-id: provider-id }
+      (merge provider {
+        last-active-block: block-height
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Verify a completed service
+(define-public (verify-service (service-id uint))
+  (let
+    (
+      (service (unwrap! (get-service service-id) (err ERR-SERVICE-NOT-FOUND)))
+      (user-mapping (unwrap! (get-user-id-by-principal tx-sender) (err ERR-USER-NOT-FOUND)))
+      (user-id (get user-id user-mapping))
+      (provider-id (get provider-id service))
+      (receiver-id (get receiver-id service))
+      (provider (unwrap! (get-user provider-id) (err ERR-USER-NOT-FOUND)))
+      (receiver (unwrap! (get-user receiver-id) (err ERR-USER-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is the receiver
+    (asserts! (is-eq user-id receiver-id) (err ERR-NOT-SERVICE-RECEIVER))
+    
+    ;; Check if service is in completed status
+    (asserts! (is-eq (get status service) SERVICE-STATUS-COMPLETED) (err ERR-SERVICE-NOT-COMPLETED))
+    
+    ;; Get the actual minutes spent
+    (let
+      (
+        (actual-mins (unwrap! (get actual-minutes service) (err ERR-INVALID-PARAMETERS)))
+        (estimated-mins (get estimated-minutes service))
+        (time-difference (- actual-mins estimated-mins))
+        (refund-amount (if (< actual-mins estimated-mins) (- estimated-mins actual-mins) u0))
+      )
+      
+      ;; Credit provider's time balance
+      (map-set users
+        { user-id: provider-id }
+        (merge provider {
+          time-balance: (+ (get time-balance provider) actual-mins),
+          time-contributed: (+ (get time-contributed provider) actual-mins),
+          last-active-block: block-height
+        })
+      )
+      
+      ;; Refund receiver if service took less time than estimated
+      (when (> refund-amount u0)
+        (map-set users
+          { user-id: receiver-id }
+          (merge receiver {
+            time-balance: (+ (get time-balance receiver) refund-amount)
+          })
+        )
+      )
+      
+      ;; Update receiver's time received
+      (map-set users
+        { user-id: receiver-id }
+        (merge receiver {
+          time-received: (+ (get time-received receiver) actual-mins),
+          last-active-block: block-height
+        })
+      )
+      
+      ;; Update service status
+      (map-set services
+        { service-id: service-id }
+        (merge service {
+          status: SERVICE-STATUS-VERIFIED,
+          verified-at: (some block-height)
+        })
+      )
+      
+      ;; Add small donation to community fund (1% of time)
+      (var-set community-fund (+ (var-get community-fund) (/ actual-mins u100)))
+      
+      (ok true)
+    )
+  )
+)
