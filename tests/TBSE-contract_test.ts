@@ -1,3 +1,4 @@
+
 import { Clarinet, Tx, Chain, Account, types } from 'https://deno.land/x/clarinet@v0.14.0/index.ts';
 import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
 
@@ -386,6 +387,7 @@ Clarinet.test({
       [types.uint(1)], // provider-id
       deployer.address
     );
+<<<<<<< HEAD
     let providerDetails = providerCall.result.expectSome().expectTuple();
     assertEquals(providerDetails['feedback-count'], types.uint(1));
     assertEquals(providerDetails['avg-rating'], types.uint(90));
@@ -740,3 +742,5 @@ Clarinet.test({
 Clarinet.test({
   name: "Enforces authorization rules properly",
   async fn(chain: Chain
+=======
+>>>>>>> e40e4135cf2f6c0dc0c303b2e7b0e4e189b922b6
