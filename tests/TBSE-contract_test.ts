@@ -387,7 +387,6 @@ Clarinet.test({
       [types.uint(1)], // provider-id
       deployer.address
     );
-<<<<<<< HEAD
     let providerDetails = providerCall.result.expectSome().expectTuple();
     assertEquals(providerDetails['feedback-count'], types.uint(1));
     assertEquals(providerDetails['avg-rating'], types.uint(90));
@@ -741,6 +740,29 @@ Clarinet.test({
 
 Clarinet.test({
   name: "Enforces authorization rules properly",
-  async fn(chain: Chain
-=======
->>>>>>> e40e4135cf2f6c0dc0c303b2e7b0e4e189b922b6
+  async fn(chain: Chain, accounts: Map<string, Account>) {
+    const deployer = accounts.get('deployer')!;
+    const user = accounts.get('wallet_1')!;
+    
+    // Try to add skill category without being contract owner
+    let unauthorizedBlock = chain.mineBlock([
+      Tx.contractCall('time-banking-service-exchange', 'add-skill-category',
+        [types.utf8("Unauthorized"), types.utf8("Description"), types.utf8("Category")],
+        user.address)
+    ]);
+    
+    // Should fail
+    assertEquals(unauthorizedBlock.receipts.length, 1);
+    assertEquals(unauthorizedBlock.receipts[0].result, '(err u1)'); // ERR-NOT-AUTHORIZED
+    
+    // Try to make user arbiter without being contract owner
+    let arbiterBlock = chain.mineBlock([
+      Tx.contractCall('time-banking-service-exchange', 'make-arbiter',
+        [types.uint(1)], user.address)
+    ]);
+    
+    // Should fail
+    assertEquals(arbiterBlock.receipts.length, 1);
+    assertEquals(arbiterBlock.receipts[0].result, '(err u1)'); // ERR-NOT-AUTHORIZED
+  },
+});
