@@ -628,13 +628,14 @@
       )
       
       ;; Refund receiver if service took less time than estimated
-      (when (> refund-amount u0)
+      (if (> refund-amount u0)
         (map-set users
           { user-id: receiver-id }
           (merge receiver {
             time-balance: (+ (get time-balance receiver) refund-amount)
           })
         )
+        true
       )
       
       ;; Update receiver's time received
@@ -763,7 +764,7 @@
     (map-set users
       { user-id: endorsed-user-id }
       (merge endorsed-user {
-        reputation-score: (min (+ (get reputation-score endorsed-user) u2) u100) ;; Small boost to reputation
+        reputation-score: (if (> (+ (get reputation-score endorsed-user) u2) u100) u100 (+ (get reputation-score endorsed-user) u2)) ;; Small boost to reputation
       })
     )
     
@@ -792,13 +793,14 @@
               (err ERR-SERVICE-ALREADY-CANCELED))
     
     ;; If service was started, refund time to receiver
-    (when (is-eq (get status service) SERVICE-STATUS-STARTED)
+    (if (is-eq (get status service) SERVICE-STATUS-STARTED)
       (map-set users
         { user-id: receiver-id }
         (merge receiver {
           time-balance: (+ (get time-balance receiver) (get estimated-minutes service))
         })
       )
+      true
     )
     
     ;; Update service status
@@ -931,7 +933,7 @@
     )
     
     ;; Apply time adjustment if needed
-    (when (not (is-eq time-adjustment 0))
+    (if (not (is-eq time-adjustment 0))
       (if (> time-adjustment 0)
         ;; Additional time for provider (from receiver)
         (begin
@@ -1005,6 +1007,7 @@
           )
         )
       )
+      true
     )
     
     ;; Update service status to completed or verified depending on original status

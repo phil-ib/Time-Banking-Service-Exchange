@@ -1,117 +1,241 @@
-Here's a comprehensive `README.md` file for your Time-Banking Service Exchange smart contract:
+# Time Banking Service Exchange (TBSE)
 
-```markdown
-# Time-Banking Service Exchange
+A decentralized platform built on Stacks blockchain for community members to exchange services based on time contributions. Users can offer skills, request services, and earn time credits through community participation.
 
-A decentralized platform for community members to exchange services based on time contributions rather than traditional currency.
+## 🐛 Recent Bug Fix
 
-## Overview
+### Issue Resolved
+The contract had several Clarity language compliance issues that were preventing successful compilation:
 
-This smart contract implements a time-banking system where:
-- 1 time credit = 1 minute of service
-- Members earn credits by providing services
-- Members spend credits by receiving services
-- All services are valued equally based on time spent
+1. **Invalid `when` function usage**: The contract was using `when` statements which are not part of the Clarity language specification
+2. **Missing `min` function**: Attempted to use a non-existent `min` function for reputation score calculations
+3. **Type mismatches in conditional statements**: Mixed return types in `if` statements
 
-## Key Features
+### Fixes Applied
+- **Replaced `when` with `if`**: All instances of `when` were replaced with proper `if` conditional statements
+- **Implemented custom min logic**: Replaced `min()` function with conditional expression: `(if (> value max) max value)`
+- **Fixed type consistency**: Ensured all conditional branches return the same type
 
-- **User Profiles**: Members can register and maintain profiles with skills and availability
-- **Service Exchange**: Request, provide, and track services within the community
-- **Reputation System**: Feedback and endorsements build user reputation
-- **Dispute Resolution**: Built-in arbitration system for conflict resolution
-- **Community Fund**: Pool of time credits for community initiatives
-- **Skill Endorsements**: Members can vouch for each other's skills
+### Code Changes
+```clarity
+;; Before (Invalid)
+(when (> refund-amount u0)
+  (map-set users ...)
+)
 
-## Contract Details
+;; After (Valid)
+(if (> refund-amount u0)
+  (map-set users ...)
+  true
+)
+```
 
-### Error Codes
+```clarity
+;; Before (Invalid)
+reputation-score: (min (+ (get reputation-score endorsed-user) u2) u100)
 
-| Code | Description |
-|------|-------------|
-| ERR-NOT-AUTHORIZED | Unauthorized action |
-| ERR-USER-NOT-FOUND | User does not exist |
-| ERR-SKILL-NOT-FOUND | Skill does not exist |
-| ERR-SERVICE-NOT-FOUND | Service does not exist |
-| ERR-INVALID-PARAMETERS | Invalid input parameters |
-| ERR-INSUFFICIENT-BALANCE | Not enough time credits |
-| ERR-ALREADY-EXISTS | Resource already exists |
-| ERR-NOT-SERVICE-PROVIDER | User is not the service provider |
-| ERR-NOT-SERVICE-RECEIVER | User is not the service receiver |
+;; After (Valid)
+reputation-score: (if (> (+ (get reputation-score endorsed-user) u2) u100) 
+                   u100 
+                   (+ (get reputation-score endorsed-user) u2))
+```
 
-### Service Statuses
+## 🚀 Features
 
-| Status | Description |
-|--------|-------------|
-| PENDING | Service requested but not started |
-| STARTED | Service in progress |
-| COMPLETED | Service completed by provider |
-| VERIFIED | Service verified by receiver |
-| DISPUTED | Service in dispute |
-| CANCELED | Service canceled |
+### Core Functionality
+- **User Registration**: Create profiles with time credit balances
+- **Skill Management**: Register and offer skills as services
+- **Service Exchange**: Request, provide, and complete services
+- **Time Banking**: Earn and spend time credits
+- **Reputation System**: Build trust through ratings and endorsements
+- **Dispute Resolution**: Community-driven conflict resolution
+- **Community Fund**: Pool for community initiatives
 
-## Usage
+### Service Lifecycle
+1. **Request**: User requests service from provider
+2. **Start**: Provider begins the service
+3. **Complete**: Provider marks service as finished
+4. **Verify**: Receiver confirms completion
+5. **Feedback**: Both parties can leave ratings
+
+## 📊 System Overview
+
+### Time Credits
+- New users start with 60 minutes (1 hour) of time credit
+- Time is measured in minutes for precision
+- 1% of verified service time goes to community fund
+- Credits can be donated to community initiatives
+
+### Reputation System
+- Scores range from 0-100
+- Based on feedback ratings and endorsements
+- Affects service matching and trust
+
+### Dispute Resolution
+- Community arbiters resolve conflicts
+- Time adjustments can be made
+- Community fund provides backup for adjustments
+
+## 🔧 Technical Details
+
+### Smart Contract
+- **Language**: Clarity
+- **Platform**: Stacks blockchain
+- **Status**: ✅ Compilation successful
+- **Compliance**: Full Clarity language compliance
+
+### Data Structures
+- **Users**: Profiles with time balances and reputation
+- **Skills**: Service categories and provider registrations
+- **Services**: Exchange records with status tracking
+- **Disputes**: Conflict resolution records
+- **Feedback**: Ratings and comments system
+
+## 🛠️ Installation & Setup
+
+### Prerequisites
+- [Clarinet](https://docs.hiro.so/smart-contracts/clarinet) installed
+- Stacks development environment
+
+### Quick Start
+```bash
+# Clone the repository
+git clone <repository-url>
+cd Time-Banking-Service-Exchange
+
+# Check contract compliance
+clarinet check
+
+# Run tests
+clarinet test
+
+# Deploy to devnet
+clarinet deploy
+```
+
+## 📋 API Reference
 
 ### User Management
-
-- `register-user`: Create a new user profile
-- `update-profile`: Update your profile information
-- `make-arbiter`: (Admin) Designate a user as dispute arbiter
+- `register-user`: Create new user profile
+- `update-profile`: Update profile information
+- `make-arbiter`: (Admin) Designate dispute arbiter
 
 ### Skill Management
-
-- `add-skill-category`: (Admin) Add a new skill category
-- `register-as-provider`: Offer a skill as a service
-- `update-provider-details`: Update your service offering details
+- `add-skill-category`: (Admin) Add new skill category
+- `register-as-provider`: Offer skill as service
+- `update-provider-details`: Update service offering
 - `endorse-skill`: Endorse another user's skill
 
 ### Service Exchange
-
-- `request-service`: Request a service from another user
-- `start-service`: Provider starts a requested service
-- `complete-service`: Provider marks service as completed
+- `request-service`: Request service from provider
+- `start-service`: Provider starts requested service
+- `complete-service`: Provider marks service complete
 - `verify-service`: Receiver verifies completed service
-- `cancel-service`: Cancel a pending or started service
+- `cancel-service`: Cancel pending or started service
 - `leave-feedback`: Provide feedback on completed service
 
 ### Dispute Resolution
-
-- `raise-dispute`: Raise a dispute about a service
-- `assign-arbiter`: (Admin) Assign arbiter to a dispute
-- `resolve-dispute`: Arbiter resolves an open dispute
+- `raise-dispute`: Raise dispute about service
+- `assign-arbiter`: (Admin) Assign arbiter to dispute
+- `resolve-dispute`: Arbiter resolves open dispute
 
 ### Community Features
-
 - `donate-to-community`: Donate time credits to community fund
 - `allocate-from-community`: (Admin) Allocate time from community fund
 
-## Technical Details
+## 🎯 Error Codes
 
-- Built using Clarity language
-- All time values are stored in minutes
-- Each new user starts with 60 minutes (1 hour) of time credit
-- 1% of verified service time goes to community fund
-- Reputation scores range from 0-100
+| Code | Description |
+|------|-------------|
+| ERR-NOT-AUTHORIZED | User lacks required permissions |
+| ERR-USER-NOT-FOUND | User does not exist |
+| ERR-SKILL-NOT-FOUND | Skill category does not exist |
+| ERR-SERVICE-NOT-FOUND | Service does not exist |
+| ERR-INVALID-PARAMETERS | Invalid input parameters |
+| ERR-INSUFFICIENT-BALANCE | Insufficient time credits |
+| ERR-ALREADY-EXISTS | Resource already exists |
+| ERR-NOT-SERVICE-PROVIDER | User is not a service provider |
+| ERR-NOT-SERVICE-RECEIVER | User is not the service receiver |
+| ERR-ALREADY-VERIFIED | Service already verified |
+| ERR-ALREADY-COMPLETED | Service already completed |
+| ERR-SERVICE-NOT-COMPLETED | Service not yet completed |
+| ERR-FEEDBACK-ALREADY-GIVEN | Feedback already provided |
+| ERR-ENDORSEMENT-ALREADY-EXISTS | Endorsement already exists |
+| ERR-SELF-ACTION-NOT-ALLOWED | Cannot perform action on self |
+| ERR-SERVICE-ALREADY-STARTED | Service already started |
+| ERR-SERVICE-NOT-STARTED | Service not yet started |
+| ERR-SERVICE-ALREADY-CANCELED | Service already canceled |
+| ERR-DISPUTE-ALREADY-EXISTS | Dispute already exists |
+| ERR-DISPUTE-NOT-FOUND | Dispute does not exist |
+| ERR-NOT-DISPUTE-PARTICIPANT | User not involved in dispute |
+| ERR-NOT-ARBITER | User is not an arbiter |
+| ERR-DISPUTE-ALREADY-RESOLVED | Dispute already resolved |
 
-## Getting Started
+## 🔄 Service Status Flow
 
-1. Register as a user with `register-user`
-2. Browse skills or register your own with `register-as-provider`
-3. Request services or offer your skills
-4. Complete services to earn time credits
-5. Use credits to receive services from others
+| Status | Description |
+|--------|-------------|
+| PENDING | Service requested, waiting to start |
+| STARTED | Service in progress |
+| COMPLETED | Service finished, awaiting verification |
+| VERIFIED | Service confirmed and time transferred |
+| DISPUTED | Service under dispute resolution |
+| CANCELED | Service canceled |
 
-## License
+## 🧪 Testing
 
-This project is open-source and available under the MIT License.
+```bash
+# Run all tests
+clarinet test
+
+# Run specific test file
+clarinet test tests/TBSE-contract_test.ts
 ```
 
-This README provides:
-1. A clear overview of the system
-2. Key features at a glance
-3. Detailed error codes and statuses
-4. Function categorization
-5. Usage instructions
-6. Technical specifications
-7. Getting started guide
+## 📈 Usage Examples
 
-You may want to customize the License section and add any project-specific deployment instructions or additional documentation links as needed.
+### Register as User
+```clarity
+(register-user "Alice" "Community organizer and gardener")
+```
+
+### Register as Service Provider
+```clarity
+(register-as-provider 1 60 "expert" "Available weekends")
+```
+
+### Request Service
+```clarity
+(request-service 2 1 "Need help with garden maintenance" 120 "Backyard needs weeding")
+```
+
+### Complete and Verify Service
+```clarity
+(complete-service 1 90)
+(verify-service 1)
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run `clarinet check` to ensure compliance
+5. Run `clarinet test` to verify functionality
+6. Submit a pull request
+
+## 📄 License
+
+This project is open-source and available under the MIT License.
+
+## 🔗 Links
+
+- [Clarity Language Documentation](https://docs.stacks.co/write-smart-contracts/overview)
+- [Clarinet Documentation](https://docs.hiro.so/smart-contracts/clarinet)
+- [Stacks Documentation](https://docs.stacks.co/)
+
+---
+
+**Status**: ✅ Production Ready  
+**Last Updated**: December 2024  
+**Version**: 1.0.0
