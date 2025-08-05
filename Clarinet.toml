@@ -8,6 +8,10 @@ requirements = []
 path = "contracts/TBSE-contract.clar"
 depends_on = []
 
+[contracts.TBSE-Enhanced-Standalone]
+path = "contracts/TBSE-Enhanced-Standalone.clar"
+depends_on = []
+
 [repl]
 costs_version = 2
 parser_version = 2
